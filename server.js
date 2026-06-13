@@ -19,6 +19,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get("/", (req, res) => {
+  res.send("HACM API is running on Vercel!");
+});
+
 const MONGO_URI =
   process.env.MONGO_URI || "mongodb://localhost:27017/hacm_annotation";
 const MAX_ANNOTATORS = parseInt(process.env.MAX_ANNOTATORS || "5", 10);

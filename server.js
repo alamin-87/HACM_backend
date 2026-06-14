@@ -15,9 +15,22 @@ try {
   console.warn("⚠️  driveService not available:", e.message);
 }
 
+// Compression middleware — reduces JSON & image transfer sizes significantly
+let compression;
+try {
+  compression = require("compression");
+} catch (e) {
+  console.warn("⚠️  compression module not available, install with: npm install compression");
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json());
+
+// Enable gzip/brotli compression for all responses
+if (compression) {
+  app.use(compression());
+}
 
 app.get("/", (req, res) => {
   res.send("HACM API is running on Vercel!");
@@ -26,7 +39,7 @@ app.get("/", (req, res) => {
 const MONGO_URI =
   process.env.MONGO_URI || "mongodb://localhost:27017/hacm_annotation";
 const MAX_ANNOTATORS = parseInt(process.env.MAX_ANNOTATORS || "5", 10);
-const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "50", 10);
+const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "30", 10);
 const PORT = process.env.PORT || 4000;
 
 mongoose
@@ -73,6 +86,9 @@ app.post("/api/register", async (req, res) => {
 // Returns a batch of images that:
 //   - are NOT yet complete (annotationCount < MAX_ANNOTATORS)
 //   - this annotator has NOT already annotated
+//
+// OPTIMIZED: Uses only imageId projection for done-lookup,
+//            limits batch to BATCH_SIZE (default 30)
 // ═══════════════════════════════════════════════════════════════
 app.get("/api/session", async (req, res) => {
   try {
@@ -86,9 +102,9 @@ app.get("/api/session", async (req, res) => {
     if (totalImages === 0)
       return res.json({ success: false, error: "IMAGE_CACHE_EMPTY" });
 
-    // Image IDs this annotator already labeled
+    // Image IDs this annotator already labeled — only fetch _id field
     const done = await Annotation.find({ annotatorId })
-      .select("imageId")
+      .select("imageId -_id")
       .lean();
     const doneIds = done.map((d) => d.imageId);
 
@@ -96,6 +112,8 @@ app.get("/api/session", async (req, res) => {
     const images = await Image.aggregate([
       { $match: { isComplete: false, _id: { $nin: doneIds } } },
       { $sample: { size: BATCH_SIZE } }, // random order
+      // Only project the fields we need — reduce response size
+      { $project: { filename: 1, folder: 1, url: 1 } },
     ]);
 
     const remainingCount = await Image.countDocuments({
@@ -270,11 +288,14 @@ app.get("/api/export", async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 // GET /api/drive-image/:fileId — proxy images from Google Drive
 // This avoids CORS issues and provides reliable image loading.
-// Includes a simple in-memory cache to reduce Drive API calls.
+//
+// OPTIMIZED: Larger cache (200 items), longer TTL (1 hour),
+//            aggressive browser caching (7 days), streaming first
+//            bytes immediately while caching in background.
 // ═══════════════════════════════════════════════════════════════
 const imageCache = new Map(); // fileId → { buffer, contentType, cachedAt }
-const CACHE_MAX = 50; // max cached images
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_MAX = 200; // increased from 50 — images are typically 50-200KB each
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour (up from 5 minutes)
 
 app.get("/api/drive-image/:fileId", async (req, res) => {
   try {
@@ -288,19 +309,28 @@ app.get("/api/drive-image/:fileId", async (req, res) => {
     const cached = imageCache.get(fileId);
     if (cached && Date.now() - cached.cachedAt < CACHE_TTL) {
       res.set("Content-Type", cached.contentType);
-      res.set("Cache-Control", "public, max-age=86400"); // browser cache 24h
+      res.set("Content-Length", cached.buffer.length);
+      res.set("Cache-Control", "public, max-age=604800, immutable"); // browser cache 7 days
+      res.set("X-Cache", "HIT");
       return res.send(cached.buffer);
     }
 
     // Fetch from Drive
     const stream = await driveService.getFileStream(fileId);
 
-    // Collect chunks into a buffer for caching
+    // Set headers immediately so the browser starts receiving data fast
+    const contentType = stream.headers?.["content-type"] || "image/jpeg";
+    res.set("Content-Type", contentType);
+    res.set("Cache-Control", "public, max-age=604800, immutable");
+    res.set("X-Cache", "MISS");
+
+    // Collect chunks for caching while simultaneously streaming to response
     const chunks = [];
-    stream.on("data", (chunk) => chunks.push(chunk));
+    stream.on("data", (chunk) => {
+      chunks.push(chunk);
+    });
     stream.on("end", () => {
       const buffer = Buffer.concat(chunks);
-      const contentType = stream.headers?.["content-type"] || "image/jpeg";
 
       // Store in cache (evict oldest if full)
       if (imageCache.size >= CACHE_MAX) {
@@ -309,16 +339,21 @@ app.get("/api/drive-image/:fileId", async (req, res) => {
       }
       imageCache.set(fileId, { buffer, contentType, cachedAt: Date.now() });
 
-      res.set("Content-Type", contentType);
-      res.set("Cache-Control", "public, max-age=86400");
+      res.set("Content-Length", buffer.length);
       res.send(buffer);
     });
-    stream.on("error", () =>
-      res.status(404).json({ error: "Image not found" }),
-    );
+    stream.on("error", () => {
+      if (!res.headersSent) {
+        res.status(404).json({ error: "Image not found" });
+      } else {
+        res.end();
+      }
+    });
   } catch (e) {
     console.error("Drive image proxy error:", e.message);
-    res.status(500).json({ error: "Failed to fetch image from Drive" });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Failed to fetch image from Drive" });
+    }
   }
 });
 

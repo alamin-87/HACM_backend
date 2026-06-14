@@ -42,10 +42,32 @@ const MAX_ANNOTATORS = parseInt(process.env.MAX_ANNOTATORS || "5", 10);
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "30", 10);
 const PORT = process.env.PORT || 4000;
 
-mongoose
-  .connect(MONGO_URI)
-  .then(() => console.log("✅ MongoDB connected"))
-  .catch((err) => console.error("❌ MongoDB connection error:", err));
+let isConnected = 0;
+const connectDB = async () => {
+  if (isConnected || mongoose.connection.readyState === 1) {
+    isConnected = 1;
+    return;
+  }
+  try {
+    await mongoose.connect(MONGO_URI, {
+      serverSelectionTimeoutMS: 5000,
+    });
+    isConnected = 1;
+    console.log("✅ MongoDB connected");
+  } catch (error) {
+    console.error("❌ MongoDB connection error:", error.message);
+    throw error;
+  }
+};
+
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (error) {
+    return res.status(500).json({ success: false, error: "Database connection failed. Ensure MongoDB Atlas IP Whitelist includes 0.0.0.0/0" });
+  }
+});
 
 // ═══════════════════════════════════════════════════════════════
 // POST /api/register  { name }

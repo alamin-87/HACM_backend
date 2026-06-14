@@ -16,20 +16,25 @@ const mongoose = require("mongoose");
 const { Image } = require("./models");
 const { listSubfolders, listImages } = require("./driveService");
 
-const MONGO_URI = process.env.MONGO_URI || "mongodb://localhost:27017/hacm_annotation";
+const MONGO_URI =
+  process.env.MONGO_URI || "mongodb://localhost:27017/hacm_annotation";
 
 async function main() {
   const rootFolderId = process.argv[2] || process.env.GOOGLE_DRIVE_FOLDER_ID;
   if (!rootFolderId) {
     console.error("❌ No folder ID provided.");
-    console.error("   Set GOOGLE_DRIVE_FOLDER_ID in .env or pass it as argument:");
+    console.error(
+      "   Set GOOGLE_DRIVE_FOLDER_ID in .env or pass it as argument:",
+    );
     console.error("   node seedDrive.js <folderId>");
     process.exit(1);
   }
 
   if (!process.env.GOOGLE_API_KEY) {
     console.error("❌ GOOGLE_API_KEY is not set in .env");
-    console.error("   Get one from: https://console.cloud.google.com/apis/credentials");
+    console.error(
+      "   Get one from: https://console.cloud.google.com/apis/credentials",
+    );
     console.error("   Enable 'Google Drive API' in your Google Cloud project.");
     process.exit(1);
   }
@@ -40,7 +45,9 @@ async function main() {
   // Clean existing images to prevent duplicates from multiple runs
   const existingCount = await Image.countDocuments();
   if (existingCount > 0) {
-    console.log(`\n🗑️  Clearing ${existingCount} existing images from database...`);
+    console.log(
+      `\n🗑️  Clearing ${existingCount} existing images from database...`,
+    );
     await Image.deleteMany({});
     console.log("   Done — database is clean.");
   }
@@ -50,10 +57,14 @@ async function main() {
   const subfolders = await listSubfolders(rootFolderId);
 
   if (subfolders.length === 0) {
-    console.log("⚠️  No subfolders found. Treating root folder as a single image folder...");
+    console.log(
+      "⚠️  No subfolders found. Treating root folder as a single image folder...",
+    );
     await seedFolder(rootFolderId, "default");
   } else {
-    console.log(`   Found ${subfolders.length} subfolders: ${subfolders.map(f => f.name).join(", ")}`);
+    console.log(
+      `   Found ${subfolders.length} subfolders: ${subfolders.map((f) => f.name).join(", ")}`,
+    );
 
     // Step 2: Process each subfolder
     for (const folder of subfolders) {
@@ -76,11 +87,15 @@ async function seedFolder(folderId, folderName) {
   const images = await listImages(folderId);
   console.log(`   Found ${images.length} images`);
 
-  let inserted = 0, skipped = 0;
+  let inserted = 0,
+    skipped = 0;
 
   for (const img of images) {
     // Check if already exists
-    const exists = await Image.findOne({ filename: img.name, folder: folderName });
+    const exists = await Image.findOne({
+      filename: img.name,
+      folder: folderName,
+    });
     if (exists) {
       skipped++;
       continue;
@@ -90,9 +105,9 @@ async function seedFolder(folderId, folderName) {
       filename: img.name,
       folder: folderName,
       driveFileId: img.id,
-      url: `/api/drive-image/${img.id}`,
+      url: `https://lh3.googleusercontent.com/d/${img.id}`,
       annotationCount: 0,
-      isComplete: false
+      isComplete: false,
     });
     inserted++;
   }
@@ -100,7 +115,7 @@ async function seedFolder(folderId, folderName) {
   console.log(`   ✅ Inserted: ${inserted}, Skipped (duplicates): ${skipped}`);
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error("❌ Fatal error:", err);
   process.exit(1);
 });

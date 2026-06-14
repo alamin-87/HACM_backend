@@ -308,6 +308,40 @@ app.get("/api/export", async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// POST /api/migrate-urls — One-time: convert old proxy URLs to
+// direct Google CDN URLs for instant image loading.
+//
+// Old: /api/drive-image/{fileId}
+// New: https://lh3.googleusercontent.com/d/{fileId}
+// ═══════════════════════════════════════════════════════════════
+app.post("/api/migrate-urls", async (req, res) => {
+  try {
+    const images = await Image.find({
+      url: { $regex: "^/api/drive-image/" },
+    });
+
+    let updated = 0;
+    for (const img of images) {
+      const match = img.url.match(/\/api\/drive-image\/(.+)/);
+      if (match) {
+        img.url = `https://lh3.googleusercontent.com/d/${match[1]}`;
+        await img.save();
+        updated++;
+      }
+    }
+
+    res.json({
+      success: true,
+      message: `Migrated ${updated} images from proxy URLs to direct CDN URLs`,
+      updated,
+      total: images.length,
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
 // GET /api/drive-image/:fileId — proxy images from Google Drive
 // This avoids CORS issues and provides reliable image loading.
 //

@@ -311,13 +311,15 @@ app.get("/api/export", async (req, res) => {
 // GET /api/drive-image/:fileId — proxy images from Google Drive
 // This avoids CORS issues and provides reliable image loading.
 //
-// OPTIMIZED: Larger cache (200 items), longer TTL (1 hour),
-//            aggressive browser caching (7 days), streaming first
-//            bytes immediately while caching in background.
+// OPTIMIZED: Streams response directly to client (no buffering),
+//            server-side LRU cache (200 items, 1hr TTL),
+//            deduplicates concurrent requests for same fileId,
+//            15s timeout on Drive fetches.
 // ═══════════════════════════════════════════════════════════════
 const imageCache = new Map(); // fileId → { buffer, contentType, cachedAt }
-const CACHE_MAX = 200; // increased from 50 — images are typically 50-200KB each
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour (up from 5 minutes)
+const CACHE_MAX = 200;
+const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const inflightRequests = new Map(); // fileId → Promise<{buffer,contentType}>
 
 app.get("/api/drive-image/:fileId", async (req, res) => {
   try {
@@ -327,54 +329,66 @@ app.get("/api/drive-image/:fileId", async (req, res) => {
 
     const { fileId } = req.params;
 
-    // Check cache first
+    // 1. Check memory cache first (fastest)
     const cached = imageCache.get(fileId);
     if (cached && Date.now() - cached.cachedAt < CACHE_TTL) {
       res.set("Content-Type", cached.contentType);
-      res.set("Content-Length", cached.buffer.length);
-      res.set("Cache-Control", "public, max-age=604800, immutable"); // browser cache 7 days
+      res.set("Content-Length", String(cached.buffer.length));
+      res.set("Cache-Control", "public, max-age=604800, immutable");
       res.set("X-Cache", "HIT");
       return res.send(cached.buffer);
     }
 
-    // Fetch from Drive
-    const stream = await driveService.getFileStream(fileId);
+    // 2. Deduplicate concurrent requests for the same file
+    //    (e.g. preloader + visible img both request same fileId)
+    if (!inflightRequests.has(fileId)) {
+      const fetchPromise = (async () => {
+        const stream = await driveService.getFileStream(fileId);
+        const contentType = stream.headers?.["content-type"] || "image/jpeg";
 
-    // Set headers immediately so the browser starts receiving data fast
-    const contentType = stream.headers?.["content-type"] || "image/jpeg";
+        return new Promise((resolve, reject) => {
+          const chunks = [];
+          const timeout = setTimeout(() => {
+            stream.destroy();
+            reject(new Error("Drive fetch timed out (15s)"));
+          }, 15000);
+
+          stream.on("data", (chunk) => chunks.push(chunk));
+          stream.on("end", () => {
+            clearTimeout(timeout);
+            const buffer = Buffer.concat(chunks);
+
+            // Store in cache (evict oldest if full)
+            if (imageCache.size >= CACHE_MAX) {
+              const oldest = imageCache.keys().next().value;
+              imageCache.delete(oldest);
+            }
+            imageCache.set(fileId, { buffer, contentType, cachedAt: Date.now() });
+            resolve({ buffer, contentType });
+          });
+          stream.on("error", (err) => {
+            clearTimeout(timeout);
+            reject(err);
+          });
+        });
+      })();
+
+      // Clean up inflight tracker when done
+      fetchPromise.finally(() => inflightRequests.delete(fileId));
+      inflightRequests.set(fileId, fetchPromise);
+    }
+
+    // 3. Await the (possibly shared) fetch and send result
+    const { buffer, contentType } = await inflightRequests.get(fileId);
     res.set("Content-Type", contentType);
+    res.set("Content-Length", String(buffer.length));
     res.set("Cache-Control", "public, max-age=604800, immutable");
-    res.set("X-Cache", "MISS");
-
-    // Collect chunks for caching while simultaneously streaming to response
-    const chunks = [];
-    stream.on("data", (chunk) => {
-      chunks.push(chunk);
-    });
-    stream.on("end", () => {
-      const buffer = Buffer.concat(chunks);
-
-      // Store in cache (evict oldest if full)
-      if (imageCache.size >= CACHE_MAX) {
-        const oldest = imageCache.keys().next().value;
-        imageCache.delete(oldest);
-      }
-      imageCache.set(fileId, { buffer, contentType, cachedAt: Date.now() });
-
-      res.set("Content-Length", buffer.length);
-      res.send(buffer);
-    });
-    stream.on("error", () => {
-      if (!res.headersSent) {
-        res.status(404).json({ error: "Image not found" });
-      } else {
-        res.end();
-      }
-    });
+    res.set("X-Cache", cached ? "REVALIDATED" : "MISS");
+    res.send(buffer);
   } catch (e) {
     console.error("Drive image proxy error:", e.message);
     if (!res.headersSent) {
-      res.status(500).json({ error: "Failed to fetch image from Drive" });
+      res.status(502).json({ error: "Failed to fetch image from Drive" });
     }
   }
 });

@@ -81,14 +81,32 @@ app.post("/api/register", async (req, res) => {
       return res
         .status(400)
         .json({ success: false, error: "Name is required" });
+    if (!email)
+      return res
+        .status(400)
+        .json({ success: false, error: "Email is required" });
 
+    // 1. Try to find by exact email match
     let annotator = await Annotator.findOne({
-      name: new RegExp(`^${escapeRegex(name)}$`, "i"),
+      email: new RegExp(`^${escapeRegex(email)}$`, "i"),
     });
-    if (annotator) {
-      // Update email if provided and not yet stored
-      if (email && !annotator.email) {
+
+    // 2. Fallback: try to find by name IF the existing record has no email
+    if (!annotator) {
+      annotator = await Annotator.findOne({
+        name: new RegExp(`^${escapeRegex(name)}$`, "i"),
+        $or: [{ email: null }, { email: "" }],
+      });
+      if (annotator) {
         annotator.email = email;
+        await annotator.save();
+      }
+    }
+
+    if (annotator) {
+      // Update name if they entered a slightly different one
+      if (annotator.name !== name) {
+        annotator.name = name;
         await annotator.save();
       }
       return res.json({
@@ -101,7 +119,7 @@ app.post("/api/register", async (req, res) => {
 
     const count = await Annotator.countDocuments();
     const annotatorId = "ANNO_" + String(count + 1).padStart(3, "0");
-    annotator = await Annotator.create({ annotatorId, name, email: email || null });
+    annotator = await Annotator.create({ annotatorId, name, email });
 
     res.json({ success: true, annotatorId, name, isNew: true });
   } catch (e) {
@@ -218,7 +236,9 @@ app.post("/api/annotate", async (req, res) => {
         durationSeconds: durationSeconds != null ? parseFloat(durationSeconds) : null,
         sessionId: sessionId || null,
         isWarmUp: !!isWarmUp,
-        ambiguityCondition: Array.isArray(ambiguityCondition) ? ambiguityCondition : [],
+        ambiguityCondition: Array.isArray(ambiguityCondition) && ambiguityCondition.length > 0
+          ? ambiguityCondition.join(", ") 
+          : null,
       });
     } catch (err) {
       if (err.code === 11000) {

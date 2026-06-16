@@ -41,11 +41,10 @@ const annotationSchema = new mongoose.Schema({
   sessionId: { type: String, default: null, index: true }, // tracks per-sitting compliance (50–300 images)
   isWarmUp: { type: Boolean, default: false }, // true for initial 5-image warm-up set
 
-  // User-provided ambiguity condition
+  // User-provided ambiguity condition (comma-separated string if multiple)
   ambiguityCondition: {
-    type: [String],
-    enum: ["Blur", "Occlusion", "Low Illumination", "Background Clutter"],
-    default: [],
+    type: String,
+    default: null,
   },
 
   createdAt: { type: Date, default: Date.now }

@@ -218,7 +218,7 @@ app.post("/api/annotate", async (req, res) => {
         durationSeconds: durationSeconds != null ? parseFloat(durationSeconds) : null,
         sessionId: sessionId || null,
         isWarmUp: !!isWarmUp,
-        ambiguityCondition: ambiguityCondition || null,
+        ambiguityCondition: Array.isArray(ambiguityCondition) ? ambiguityCondition : [],
       });
     } catch (err) {
       if (err.code === 11000) {

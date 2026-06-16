@@ -43,9 +43,9 @@ const annotationSchema = new mongoose.Schema({
 
   // User-provided ambiguity condition
   ambiguityCondition: {
-    type: String,
+    type: [String],
     enum: ["Blur", "Occlusion", "Low Illumination", "Background Clutter"],
-    default: null,
+    default: [],
   },
 
   createdAt: { type: Date, default: Date.now }

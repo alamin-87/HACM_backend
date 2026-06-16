@@ -51,6 +51,12 @@ const connectDB = async () => {
   try {
     await mongoose.connect(MONGO_URI, {
       serverSelectionTimeoutMS: 5000,
+      // ── Serverless-optimised connection settings ──────────
+      bufferCommands: false,        // fail fast if not connected
+      maxPoolSize: 10,              // enough for concurrent requests
+      minPoolSize: 0,               // don't keep idle connections
+      socketTimeoutMS: 45000,       // close stale sockets quickly
+      maxIdleTimeMS: 10000,         // reclaim idle connections fast
     });
     isConnected = 1;
     console.log("✅ MongoDB connected");
@@ -249,27 +255,34 @@ app.post("/api/annotate", async (req, res) => {
       throw err;
     }
 
-    // Atomically bump the counter and check completion
-    const updated = await Image.findByIdAndUpdate(
-      imageId,
-      { $inc: { annotationCount: 1 } },
-      { new: true },
-    );
-
-    if (
-      updated &&
-      updated.annotationCount >= MAX_ANNOTATORS &&
-      !updated.isComplete
-    ) {
-      updated.isComplete = true;
-      await updated.save();
-    }
-
-    // Update annotator's total
-    await Annotator.findOneAndUpdate(
-      { annotatorId },
-      { $inc: { totalDone: 1 } },
-    );
+    // Run image-counter bump and annotator-counter bump in PARALLEL
+    // (they are independent operations — no reason to wait sequentially)
+    const [updated] = await Promise.all([
+      // Atomically bump the counter + set isComplete in ONE operation
+      Image.findByIdAndUpdate(
+        imageId,
+        [
+          {
+            $set: {
+              annotationCount: { $add: ["$annotationCount", 1] },
+              isComplete: {
+                $cond: {
+                  if: { $gte: [{ $add: ["$annotationCount", 1] }, MAX_ANNOTATORS] },
+                  then: true,
+                  else: "$isComplete",
+                },
+              },
+            },
+          },
+        ],
+        { new: true },
+      ),
+      // Update annotator's total (runs simultaneously)
+      Annotator.findOneAndUpdate(
+        { annotatorId },
+        { $inc: { totalDone: 1 } },
+      ),
+    ]);
 
     res.json({
       success: true,

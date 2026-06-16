@@ -81,11 +81,58 @@ async function main() {
   await mongoose.disconnect();
 }
 
+// ── Helpers for research metadata ────────────────────────────
+// Ambiguity conditions recognized by the HACM protocol
+const AMBIGUITY_CONDITIONS = ["Blur", "Occlusion", "Low Illumination", "Background Clutter"];
+
+// Map folder codes to their full class labels
+const FOLDER_TO_LABEL = {
+  CA: "CA", PH: "PH", PN: "PN", WL: "WL", WT: "WT",
+};
+
+/**
+ * Parse research metadata from folder name and filename.
+ *
+ * Folder naming conventions supported:
+ *   "WT"               → trueLabel = "WT", ambiguityCondition = null
+ *   "WT_Blur"          → trueLabel = "WT", ambiguityCondition = "Blur"
+ *   "Blur"             → trueLabel = null,  ambiguityCondition = "Blur"
+ *   "Low Illumination" → trueLabel = null,  ambiguityCondition = "Low Illumination"
+ *
+ * objectInstanceId is derived from the filename (without extension).
+ */
+function parseMetadata(folderName, filename) {
+  let trueLabel = null;
+  let ambiguityCondition = null;
+
+  // Check if folder name contains an ambiguity condition
+  for (const cond of AMBIGUITY_CONDITIONS) {
+    if (folderName.toLowerCase().includes(cond.toLowerCase())) {
+      ambiguityCondition = cond;
+      break;
+    }
+  }
+
+  // Check if folder starts with a known class code (e.g. "WT", "WT_Blur")
+  const folderUpper = folderName.toUpperCase().split(/[_\s-]/)[0];
+  if (FOLDER_TO_LABEL[folderUpper]) {
+    trueLabel = FOLDER_TO_LABEL[folderUpper];
+  }
+
+  // objectInstanceId = filename without extension (e.g. "Pen_01.jpg" → "Pen_01")
+  const objectInstanceId = filename.replace(/\.[^.]+$/, "");
+
+  return { trueLabel, ambiguityCondition, objectInstanceId };
+}
+
 async function seedFolder(folderId, folderName) {
   console.log(`\n📂 Processing folder: ${folderName}`);
 
   const images = await listImages(folderId);
   console.log(`   Found ${images.length} images`);
+
+  // collectorId from env (can override per-run)
+  const collectorId = process.env.COLLECTOR_ID || null;
 
   let inserted = 0,
     skipped = 0;
@@ -101,6 +148,8 @@ async function seedFolder(folderId, folderName) {
       continue;
     }
 
+    const meta = parseMetadata(folderName, img.name);
+
     await Image.create({
       filename: img.name,
       folder: folderName,
@@ -108,11 +157,17 @@ async function seedFolder(folderId, folderName) {
       url: `https://lh3.googleusercontent.com/d/${img.id}`,
       annotationCount: 0,
       isComplete: false,
+      // Research metadata
+      ambiguityCondition: meta.ambiguityCondition,
+      trueLabel: meta.trueLabel,
+      objectInstanceId: meta.objectInstanceId,
+      collectorId: collectorId,
     });
     inserted++;
   }
 
   console.log(`   ✅ Inserted: ${inserted}, Skipped (duplicates): ${skipped}`);
+  if (collectorId) console.log(`   📋 Collector: ${collectorId}`);
 }
 
 main().catch((err) => {

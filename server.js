@@ -76,6 +76,7 @@ app.use(async (req, res, next) => {
 app.post("/api/register", async (req, res) => {
   try {
     const name = (req.body.name || "").trim();
+    const email = (req.body.email || "").trim();
     if (name.length < 2)
       return res
         .status(400)
@@ -85,6 +86,11 @@ app.post("/api/register", async (req, res) => {
       name: new RegExp(`^${escapeRegex(name)}$`, "i"),
     });
     if (annotator) {
+      // Update email if provided and not yet stored
+      if (email && !annotator.email) {
+        annotator.email = email;
+        await annotator.save();
+      }
       return res.json({
         success: true,
         annotatorId: annotator.annotatorId,
@@ -95,7 +101,7 @@ app.post("/api/register", async (req, res) => {
 
     const count = await Annotator.countDocuments();
     const annotatorId = "ANNO_" + String(count + 1).padStart(3, "0");
-    annotator = await Annotator.create({ annotatorId, name });
+    annotator = await Annotator.create({ annotatorId, name, email: email || null });
 
     res.json({ success: true, annotatorId, name, isNew: true });
   } catch (e) {
@@ -134,8 +140,11 @@ app.get("/api/session", async (req, res) => {
     const images = await Image.aggregate([
       { $match: { isComplete: false, _id: { $nin: doneIds } } },
       { $sample: { size: BATCH_SIZE } }, // random order
-      // Only project the fields we need — reduce response size
-      { $project: { filename: 1, folder: 1, url: 1 } },
+      // Project fields needed by frontend + research metadata
+      { $project: {
+        filename: 1, folder: 1, url: 1,
+        ambiguityCondition: 1, trueLabel: 1, objectInstanceId: 1, collectorId: 1,
+      } },
     ]);
 
     const remainingCount = await Image.countDocuments({
@@ -151,6 +160,10 @@ app.get("/api/session", async (req, res) => {
         folder: img.folder,
         filename: img.filename,
         url: img.url,
+        ambiguityCondition: img.ambiguityCondition || null,
+        trueLabel: img.trueLabel || null,
+        objectInstanceId: img.objectInstanceId || null,
+        collectorId: img.collectorId || null,
       })),
       totalImages,
       doneCount: doneIds.length,
@@ -180,6 +193,11 @@ app.post("/api/annotate", async (req, res) => {
       label,
       labelName,
       confidence,
+      // QC fields
+      durationSeconds,
+      sessionId,
+      isWarmUp,
+      ambiguityCondition,
     } = req.body;
     if (!annotatorId || !imageId || !label) {
       return res
@@ -196,6 +214,11 @@ app.post("/api/annotate", async (req, res) => {
         label,
         labelName,
         confidence: Math.max(0, Math.min(100, parseInt(confidence, 10) || 0)),
+        // QC fields
+        durationSeconds: durationSeconds != null ? parseFloat(durationSeconds) : null,
+        sessionId: sessionId || null,
+        isWarmUp: !!isWarmUp,
+        ambiguityCondition: ambiguityCondition || null,
       });
     } catch (err) {
       if (err.code === 11000) {
@@ -287,18 +310,29 @@ app.get("/api/progress", async (req, res) => {
 app.get("/api/export", async (req, res) => {
   try {
     const annotations = await Annotation.find()
-      .populate("imageId", "filename folder url")
+      .populate("imageId", "filename folder url ambiguityCondition trueLabel objectInstanceId collectorId")
       .lean();
     const out = annotations.map((a) => ({
       annotation_id: a._id.toString(),
       image_id: a.imageId?._id?.toString(),
       filename: a.imageId?.filename,
       folder: a.imageId?.folder,
+      // Research metadata (from Image)
+      ambiguity_condition: a.imageId?.ambiguityCondition || null,
+      true_label: a.imageId?.trueLabel || null,
+      object_instance_id: a.imageId?.objectInstanceId || null,
+      collector_id: a.imageId?.collectorId || null,
+      // Annotation data
       annotator_id: a.annotatorId,
       annotator_name: a.annotatorName,
       label: a.label,
       label_name: a.labelName,
       confidence: a.confidence,
+      // QC fields
+      duration_seconds: a.durationSeconds,
+      session_id: a.sessionId,
+      is_warm_up: a.isWarmUp,
+      annotator_ambiguity_condition: a.ambiguityCondition, // Condition specified by annotator
       timestamp: a.createdAt,
     }));
     res.json({ success: true, count: out.length, annotations: out });

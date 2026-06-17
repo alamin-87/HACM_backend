@@ -255,6 +255,13 @@ app.post("/api/annotate", async (req, res) => {
       throw err;
     }
 
+    if (isWarmUp) {
+      return res.json({
+        success: true,
+        imageComplete: false,
+      });
+    }
+
     // Run image-counter bump and annotator-counter bump in PARALLEL
     // (they are independent operations — no reason to wait sequentially)
     const [updated] = await Promise.all([

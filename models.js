@@ -15,8 +15,8 @@ const imageSchema = new mongoose.Schema({
   // Required for ambiguity-stratified analysis (central empirical contribution)
   ambiguityCondition: {
     type: String,
-    enum: ["Blur", "Occlusion", "Low Illumination", "Background Clutter"],
-    default: null,
+    enum: ["Baseline", "Blur", "Occlusion", "Low Illumination", "Background Clutter"],
+    default: "Baseline",
     index: true,
   },
   trueLabel: { type: String, default: null }, // ground-truth label from collector (for accuracy & ECE)
@@ -44,7 +44,7 @@ const annotationSchema = new mongoose.Schema({
   // User-provided ambiguity condition (comma-separated string if multiple)
   ambiguityCondition: {
     type: String,
-    default: null,
+    default: "Baseline",
   },
 
   createdAt: { type: Date, default: Date.now }

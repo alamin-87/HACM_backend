@@ -425,17 +425,21 @@ app.post("/api/migrate-urls", async (req, res) => {
 //            15s timeout on Drive fetches.
 // ═══════════════════════════════════════════════════════════════
 const imageCache = new Map(); // fileId → { buffer, contentType, cachedAt }
-const CACHE_MAX = 200;
-const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const CACHE_MAX = 500;
+const CACHE_TTL = 4 * 60 * 60 * 1000; // 4 hours (images are static)
 const inflightRequests = new Map(); // fileId → Promise<{buffer,contentType}>
 
 app.get("/api/drive-image/:fileId", async (req, res) => {
   try {
-    if (!driveService) {
-      return res.status(503).json({ error: "Google Drive not configured" });
-    }
-
     const { fileId } = req.params;
+
+    // Explicit CORS headers for mobile browsers
+    res.set("Access-Control-Allow-Origin", "*");
+
+    // If Drive service not configured, redirect to lh3 CDN as fallback
+    if (!driveService) {
+      return res.redirect(`https://lh3.googleusercontent.com/d/${fileId}=w800`);
+    }
 
     // 1. Check memory cache first (fastest)
     const cached = imageCache.get(fileId);
@@ -496,7 +500,9 @@ app.get("/api/drive-image/:fileId", async (req, res) => {
   } catch (e) {
     console.error("Drive image proxy error:", e.message);
     if (!res.headersSent) {
-      res.status(502).json({ error: "Failed to fetch image from Drive" });
+      // On proxy failure, redirect to lh3 CDN as last resort
+      const { fileId } = req.params;
+      res.redirect(`https://lh3.googleusercontent.com/d/${fileId}=w800`);
     }
   }
 });

@@ -94,7 +94,7 @@ const FOLDER_TO_LABEL = {
  * Parse research metadata from folder name and filename.
  *
  * Folder naming conventions supported:
- *   "WT"               → trueLabel = "WT", ambiguityCondition = null
+ *   "WT"               → trueLabel = "WT", ambiguityCondition = "Baseline"
  *   "WT_Blur"          → trueLabel = "WT", ambiguityCondition = "Blur"
  *   "Blur"             → trueLabel = null,  ambiguityCondition = "Blur"
  *   "Low Illumination" → trueLabel = null,  ambiguityCondition = "Low Illumination"
@@ -103,7 +103,7 @@ const FOLDER_TO_LABEL = {
  */
 function parseMetadata(folderName, filename) {
   let trueLabel = null;
-  let ambiguityCondition = null;
+  let ambiguityCondition = "Baseline";
 
   // Check if folder name contains an ambiguity condition
   for (const cond of AMBIGUITY_CONDITIONS) {

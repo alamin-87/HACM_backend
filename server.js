@@ -184,7 +184,7 @@ app.get("/api/session", async (req, res) => {
         folder: img.folder,
         filename: img.filename,
         url: img.url,
-        ambiguityCondition: img.ambiguityCondition || null,
+        ambiguityCondition: img.ambiguityCondition || "Baseline",
         trueLabel: img.trueLabel || null,
         objectInstanceId: img.objectInstanceId || null,
         collectorId: img.collectorId || null,
@@ -244,7 +244,7 @@ app.post("/api/annotate", async (req, res) => {
         isWarmUp: !!isWarmUp,
         ambiguityCondition: Array.isArray(ambiguityCondition) && ambiguityCondition.length > 0
           ? ambiguityCondition.join(", ") 
-          : null,
+          : "Baseline",
       });
     } catch (err) {
       if (err.code === 11000) {
@@ -358,7 +358,7 @@ app.get("/api/export", async (req, res) => {
       filename: a.imageId?.filename,
       folder: a.imageId?.folder,
       // Research metadata (from Image)
-      ambiguity_condition: a.imageId?.ambiguityCondition || null,
+      ambiguity_condition: a.imageId?.ambiguityCondition || "Baseline",
       true_label: a.imageId?.trueLabel || null,
       object_instance_id: a.imageId?.objectInstanceId || null,
       collector_id: a.imageId?.collectorId || null,
